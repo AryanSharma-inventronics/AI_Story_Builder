@@ -1,0 +1,49 @@
+# requirements.txt
+
+# Core framework
+streamlit
+
+# For making HTTP requests (e.g., to SharePoint Graph API)
+requests
+
+# For parsing .msg email files
+extract_msg
+
+# For generating intermediate PDFs from email content
+reportlab
+
+# For extracting text from the generated PDFs
+PyMuPDF
+
+# For generating .docx Word files for download
+python-docx
+
+# Optional: For cleaning HTML content from emails
+beautifulsoup4
+
+# --- RAG & Local LLM Dependencies ---
+
+# LangChain Core components
+langchain
+langchain-community # For integrations like LlamaCpp, Chroma
+
+# Vector Database
+chromadb
+
+# Embeddings Model support
+sentence-transformers # Downloads embedding models from Hugging Face
+
+# Local GGUF Model Execution
+llama-cpp-python # For loading GGUF models
+
+# Language Detection
+langdetect
+
+# Local LLM Execution via Transformers (Keep if still using other models, otherwise optional)
+transformers
+torch
+accelerate
+bitsandbytes
+
+# Other potential LangChain integrations if needed later
+# langchain-huggingface
