@@ -1,11 +1,9 @@
-"""Functions for generating stories section by section using a selectable local GGUF LLM via RAG."""
-
 import streamlit as st
 import chromadb
 from chromadb.utils import embedding_functions
 import os
-import re # For checking model names and cleaning tags
-import traceback # For detailed error logging
+import re
+import traceback
 
 # LangChain imports
 try:
@@ -19,18 +17,15 @@ except ImportError as e:
     class PromptTemplate: pass
     class LLMChain: pass
 
-
-# --- Configuration ---
 CHROMA_DB_PATH = "./chroma_db"
 COLLECTION_NAME = "msg_pdf_content"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 N_RESULTS_RETRIEVAL_PER_SECTION = 5
-MAX_PAST_SECTIONS_IN_CONTEXT = 3 # Increased slightly for better context flow
+MAX_PAST_SECTIONS_IN_CONTEXT = 3
 
-MAX_OUTPUT_TOKENS_REGULAR_SECTION = 1500      # Target for regular sections
-DESIRED_MAX_OUTPUT_TOKENS_SUMMARY = 2500  # Increased target for Executive Summary
+MAX_OUTPUT_TOKENS_REGULAR_SECTION = 1500
+DESIRED_MAX_OUTPUT_TOKENS_SUMMARY = 2500
 
-# SECTIONS_CONFIG (Modified instructions for clarity, anti-repetition, and flexibility)
 SECTIONS_CONFIG = [
     {
         "id": "storyline_overview",
@@ -70,8 +65,6 @@ SECTIONS_CONFIG = [
     }
 ]
 
-# --- Global Variables for Loaded Resources (Cache using Streamlit) ---
-
 @st.cache_resource(show_spinner=False)
 def load_gguf_llm(model_path: str, model_name_key: str):
     st.info(f"Attempting to load GGUF model: {model_name_key} from: {model_path}")
@@ -79,21 +72,19 @@ def load_gguf_llm(model_path: str, model_name_key: str):
         st.error(f"Model file not found at path: {model_path}")
         return None
     try:
-        # Increased default max tokens as a general ceiling
         default_init_max_tokens = 4096
-
-        stop_sequences = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>"] # More inclusive stop list
+        stop_sequences = ["<|endoftext|>", "<|im_end|>", "<|eot_id|>"]
         st.info(f"Using stop sequences: {stop_sequences}")
 
         llm = LlamaCpp(
             model_path=model_path,
-            n_gpu_layers=0, # Set to > 0 if you have GPU support and want to use it
+            n_gpu_layers=0,
             n_batch=512,
-            n_ctx=32768,    # Keep large context
+            n_ctx=32768,
             f16_kv=True,
-            verbose=False, # Set to True for very detailed llama.cpp logs, False for cleaner UI
+            verbose=False,
             temperature=0.6,
-            max_tokens=default_init_max_tokens, # Set a high initial value
+            max_tokens=default_init_max_tokens,
             stop=stop_sequences,
         )
         model_n_ctx = llm.n_ctx if hasattr(llm, 'n_ctx') else 32768
@@ -133,7 +124,6 @@ def get_prompt_for_single_section(
     limited_cumulative_story_so_far: str,
     model_name_key: str
 ) -> str:
-    # Added stronger anti-meta/anti-think instructions
     system_instructions = f"""You are an expert analyst and storyteller. Your ONLY task is to generate the content for the story section: "**{section_title_for_prompt}**".
 The overall story topic is: **{story_topic}**.
 
@@ -147,12 +137,12 @@ The overall story topic is: **{story_topic}**.
 7.  **NEVER, under any circumstances, output `<think>` or `</think>` tags in your final response.**
 
 **Internal Thought Process (DO NOT OUTPUT):**
-   - *Understand the goal of '{section_title_for_prompt}'.*
-   - *Identify key info in 'Input Documents' for '{story_topic}' & '{section_title_for_prompt}'.*
-   - *Plan structure & format based on instructions.*
-   - *Ensure uniqueness & accuracy.*
-   - *Craft clear language.*
-   - *Ensure a complete section.*
+    - *Understand the goal of '{section_title_for_prompt}'.*
+    - *Identify key info in 'Input Documents' for '{story_topic}' & '{section_title_for_prompt}'.*
+    - *Plan structure & format based on instructions.*
+    - *Ensure uniqueness & accuracy.*
+    - *Craft clear language.*
+    - *Ensure a complete section.*
 **--- END OF INTERNAL THOUGHTS ---**
 """
 
@@ -187,7 +177,6 @@ Follow these specific instructions:
 **FINAL REMINDER:** Output ONLY the clean text for this section. No titles, no tags, no placeholders, no meta-comments.
 """
 
-    # Simplified prompt formatting, assuming ChatML-like structure is generally effective.
     formatted_prompt_template = f"<|im_start|>system\n{system_instructions.strip()}<|im_end|>\n<|im_start|>user\n{user_instructions.strip()}<|im_end|>\n<|im_start|>assistant\n"
     return formatted_prompt_template
 
@@ -195,31 +184,24 @@ def clean_llm_output(raw_text: str, section_title: str) -> str:
     """Cleans raw LLM output, removing common artifacts."""
     text = raw_text.strip()
 
-    # Remove potential assistant markers
     if text.lower().startswith("assistant\n"):
         text = text[len("assistant\n"):].lstrip()
 
-    # Remove <think> blocks *aggressively*
     text = re.sub(r"<think\b[^>]*>.*?</think\s*>\s*", "", text, flags=re.DOTALL | re.IGNORECASE)
-    # Remove any stray <think> or </think> tags
     text = re.sub(r"</?think\b[^>]*>\s*", "", text, flags=re.IGNORECASE).strip()
 
-    # If, after cleaning, it *still* starts with a think tag (likely truncated), warn and clear.
     if re.match(r"<think\b[^>]*>", text, flags=re.IGNORECASE):
         st.warning(f"Section '{section_title}': Detected an unclosed/malformed `<think>` block *even after cleaning*. This likely means severe truncation. Clearing content.")
-        return "" # Return empty if it's still bad
+        return ""
 
-    # Remove known stop tokens
     stop_tokens = ["<|im_end|>", "<|endoftext|>", "<|eot_id|>"]
     for stop in stop_tokens:
         if stop in text:
             text = text.split(stop)[0].strip()
 
-    # Remove potential instruction echoes
     if text.lower().startswith("[/inst]"):
         text = text[len("[/inst]"):].lstrip()
 
-    # Remove echoed section titles (more robustly)
     core_title = re.sub(r"^[#\s]*\[?([^#\]\[]+)\]?$", r"\1", section_title).strip()
     if core_title:
         title_pattern = re.compile(r"^(?:[#\s]*\[?" + re.escape(core_title) + r"\]?[:\s]*\n?)+", re.IGNORECASE)
@@ -242,8 +224,7 @@ def generate_story_with_rag(story_topic: str, model_path: str, model_name_key: s
         return "Error: Failed to connect to ChromaDB."
 
     all_generated_section_outputs = []
-    # ** INCREASED OUTPUT BUFFER SIGNIFICANTLY **
-    output_buffer = 1024 # Increased from 60 to give much more room for generation
+    output_buffer = 1024
 
     for section_index, section_config in enumerate(SECTIONS_CONFIG):
         section_id = section_config["id"]
@@ -277,14 +258,12 @@ def generate_story_with_rag(story_topic: str, model_path: str, model_name_key: s
         limited_cumulative_story_for_prompt = ""
         valid_past_sections = [s for s in all_generated_section_outputs if not s.lower().startswith(("- error", "- failed", "information for this section"))]
 
-        # Use full story for Exec Summary (with token check), limited for others
         if section_id == "executive_summary":
             if valid_past_sections:
-                # Cleaner SSF for summary - join only content, no titles.
                 full_story_content = "\n".join([re.sub(r"^[#\s]*\[?[^#\]\[]+\]?[\s\n]*", "", s).strip() for s in valid_past_sections])
                 limited_cumulative_story_for_prompt = "[Full preceding story context follows for summary generation:]\n" + full_story_content
             else:
-                 limited_cumulative_story_for_prompt = "[No valid previous sections available for summary.]"
+                limited_cumulative_story_for_prompt = "[No valid previous sections available for summary.]"
         elif valid_past_sections:
             start_index = max(0, len(valid_past_sections) - MAX_PAST_SECTIONS_IN_CONTEXT)
             relevant_past_parts = valid_past_sections[start_index:]
@@ -313,9 +292,7 @@ def generate_story_with_rag(story_topic: str, model_path: str, model_name_key: s
             continue
 
         available_tokens_for_output = model_n_ctx - num_input_tokens - output_buffer
-
-        # Check if enough tokens *actually* exist
-        min_required_output = 200 # Minimum sensible output tokens
+        min_required_output = 200
         if available_tokens_for_output <= min_required_output:
             st.error(f"⛔ Not enough tokens available for output ({available_tokens_for_output}). Input: {num_input_tokens}. Need > {min_required_output}. Skipping.")
             all_generated_section_outputs.append(f"\n{section_title_display}\n- Error: Not enough tokens available for LLM output.\n")
@@ -324,7 +301,6 @@ def generate_story_with_rag(story_topic: str, model_path: str, model_name_key: s
         target_output_tokens = DESIRED_MAX_OUTPUT_TOKENS_SUMMARY if section_id == "executive_summary" else MAX_OUTPUT_TOKENS_REGULAR_SECTION
         effective_max_tokens = min(target_output_tokens, available_tokens_for_output)
 
-        # Set the LLM's max_tokens for *this specific call*
         llm.max_tokens = effective_max_tokens
         st.write(f"LLM processing... (Max new tokens: {effective_max_tokens})")
 
@@ -335,18 +311,16 @@ def generate_story_with_rag(story_topic: str, model_path: str, model_name_key: s
                 result = llm_chain.invoke({"context": section_context_for_rag})
                 generated_content_raw = result["text"].strip()
 
-            # Use the cleaning function
             final_cleaned_llm_output = clean_llm_output(generated_content_raw, section_title_display)
 
             if not final_cleaned_llm_output:
                 st.warning(f"LLM returned empty or problematic content for '{section_title_display}' after cleaning.")
                 generated_content_final = f"Information for this section ('{section_title_display}') was not available or generation resulted in empty/problematic content."
             else:
-                # ** Added check for repetition - very basic, could be improved **
                 lines = final_cleaned_llm_output.splitlines()
                 if len(lines) > 5:
                     line_set = set(lines)
-                    if len(line_set) < len(lines) / 2: # If more than half the lines are repeats
+                    if len(line_set) < len(lines) / 2:
                        st.error(f"🚨 High repetition detected in '{section_title_display}'. Output might be flawed. Using placeholder.")
                        generated_content_final = f"Generation for '{section_title_display}' resulted in excessive repetition and was discarded."
                     else:
@@ -365,21 +339,12 @@ def generate_story_with_rag(story_topic: str, model_path: str, model_name_key: s
         current_section_full_output = f"{section_title_display}{newline_separator}{generated_content_final.strip()}\n"
         all_generated_section_outputs.append(current_section_full_output)
 
-        # Display generated section (optional, but helpful for debugging)
-        with st.expander(f"View Generated: {section_title_display}"):
-            st.markdown(current_section_full_output)
-
-
     final_story_assembled = "".join(all_generated_section_outputs).strip()
-    acquisition_note = "Note: OSRAM's Digital Systems division was acquired by Inventronics in September 2023."
-
-    final_story_assembled = final_story_assembled.replace(acquisition_note, "").strip()
-    final_story_with_note = f"{final_story_assembled}\n\n{acquisition_note}".strip()
 
     if not final_story_assembled:
         st.error("Complete story generation failed.")
-        return f"Error: Story generation resulted in no content.\n\n{acquisition_note}"
+        return "Error: Story generation resulted in no content."
 
     st.balloons()
     st.success("🎉 Story generation complete!")
-    return final_story_with_note
+    return final_story_assembled
